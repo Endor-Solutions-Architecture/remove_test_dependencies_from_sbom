@@ -8,7 +8,7 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 import requests
 
@@ -32,9 +32,10 @@ def get_env_values():
     api_secret = os.getenv("API_SECRET")
     organization = os.getenv("ORGANIZATION")
     person_email = os.getenv("PERSON_EMAIL")
+    initial_namespace = os.getenv("ENDOR_NAMESPACE")
     
-    if not api_key or not api_secret:
-        print("ERROR: API_KEY and API_SECRET environment variables must be set.")
+    if not api_key or not api_secret or not initial_namespace:
+        print("ERROR: API_KEY, API_SECRET, and ENDOR_NAMESPACE environment variables must be set.")
         print("Please set them in a .env file or directly in your environment.")
         sys.exit(1)
     
@@ -42,7 +43,8 @@ def get_env_values():
         "api_key": api_key,
         "api_secret": api_secret,
         "organization": organization,
-        "person_email": person_email
+        "person_email": person_email,
+        "initial_namespace": initial_namespace
     }
 
 def get_token(api_key, api_secret):
@@ -65,6 +67,57 @@ def get_token(api_key, api_secret):
     except requests.exceptions.RequestException as e:
         print(f"Failed to get token: {e}")
         sys.exit(1)
+
+def get_project_details(token, project_uuid, initial_namespace):
+    """
+    Fetch project details and extract name and namespace.
+    
+    Args:
+        token: The API token
+        project_uuid: The UUID of the project
+        initial_namespace: The initial namespace from .env
+    
+    Returns:
+        Tuple containing (project_name, namespace)
+    """
+    url = f"{API_URL}/namespaces/{initial_namespace}/projects"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Request-Timeout": "600"
+    }
+    
+    params = {
+        "list_parameters.filter": f"uuid=={project_uuid}",
+        "list_parameters.mask": "meta.name,tenant_meta.namespace",
+        "list_parameters.traverse": "true"
+    }
+    
+    print(f"Fetching project details for project {project_uuid}...")
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=600)
+        response.raise_for_status()
+        
+        data = response.json()
+        objects = data.get('list', {}).get('objects', [])
+        
+        if objects and len(objects) > 0:
+            project_data = objects[0]
+            project_name = project_data.get('meta', {}).get('name')
+            namespace = project_data.get('tenant_meta', {}).get('namespace')
+            
+            if project_name and namespace:
+                print(f"Project name: {project_name}, Namespace: {namespace}")
+                return project_name, namespace
+        
+        print("Project details not found in response")
+        return None, None
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to get project details: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"Response: {e.response.text}")
+        return None, None
 
 def get_package_versions(namespace, token, project_uuid):
     url = f"{API_URL}/namespaces/{namespace}/package-versions"
@@ -305,10 +358,48 @@ def get_dependency_metadata(namespace, token, project_uuid):
     print(f"Fetched {len(dependencies)} total dependencies, {len(direct_dependencies)} are direct dependencies")
     return result
 
+def get_project_name(namespace, token, project_uuid):
+    url = f"{API_URL}/namespaces/{namespace}/projects"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Request-Timeout": "600"
+    }
+    
+    params = {
+        "list_parameters.filter": f"uuid=={project_uuid}",
+        "list_parameters.mask": "meta.name",
+        "list_parameters.traverse": "true"
+    }
+    
+    print(f"Fetching project name for project {project_uuid}...")
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=600)
+        response.raise_for_status()
+        
+        data = response.json()
+        objects = data.get('list', {}).get('objects', [])
+        
+        if objects and len(objects) > 0:
+            project_data = objects[0]
+            project_name = project_data.get('meta', {}).get('name')
+            
+            if project_name:
+                print(f"Project name: {project_name}")
+                return project_name
+        
+        print("Project name not found in response")
+        return None
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to get project name: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"Response: {e.response.text}")
+        return None
+
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(description='Create a SPDX SBOM using the Endor Labs API.')
-    parser.add_argument('--namespace', type=str, required=True, help='The namespace to use')
     parser.add_argument('--project_uuid', type=str, required=True, help='The UUID of the project')
     parser.add_argument('--output', type=str, help='Output SPDX file name (defaults to {project_uuid}-spdx.json)')
     parser.add_argument('--format', type=str, choices=['json', 'xml'], default='json', help='Output format (json or xml)')
@@ -328,11 +419,20 @@ def main():
         print("Failed to get API token.")
         sys.exit(1)
     
+    # Get project details using the initial namespace from .env
+    project_name, namespace = get_project_details(token, args.project_uuid, env["initial_namespace"])
+    
+    if not namespace:
+        print(f"ERROR: Could not determine namespace for project {args.project_uuid}.")
+        sys.exit(1)
+    
+    print(f"Using namespace from project details: {namespace}")
+    
     # Map format argument to API value
     output_format = f"FORMAT_{args.format.upper()}"
     
     # First, get all packageVersions for the project
-    package_versions = get_package_versions(args.namespace, token, args.project_uuid)
+    package_versions = get_package_versions(namespace, token, args.project_uuid)
     
     if not package_versions:
         print(f"No packageVersions found for project {args.project_uuid}.")
@@ -342,10 +442,10 @@ def main():
     package_version_uuids = [pv['uuid'] for pv in package_versions]
     
     # Get dependency metadata
-    dependency_metadata = get_dependency_metadata(args.namespace, token, args.project_uuid)
+    dependency_metadata = get_dependency_metadata(namespace, token, args.project_uuid)
     
     # Generate a CycloneDX SBOM with all package versions
-    cyclonedx_response = create_cyclonedx_sbom_export(args.namespace, token, package_version_uuids, output_format)
+    cyclonedx_response = create_cyclonedx_sbom_export(namespace, token, package_version_uuids, output_format)
     
     if not cyclonedx_response:
         print("Failed to generate CycloneDX SBOM.")
@@ -369,8 +469,8 @@ def main():
     
     # Convert to SPDX format
     if cyclonedx_data:
-        spdx_data = convert_cyclonedx_to_spdx(cyclonedx_data, args.namespace, args.project_uuid, 
-                                             env["organization"], env["person_email"], dependency_metadata)
+        spdx_data = convert_cyclonedx_to_spdx(cyclonedx_data, namespace, args.project_uuid, 
+                                             env["organization"], env["person_email"], dependency_metadata, project_name)
         
         if spdx_data:
             # Save the SPDX SBOM
@@ -384,7 +484,7 @@ def main():
         print("Failed to process CycloneDX data.")
         sys.exit(1)
 
-def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organization, person_email, dependency_metadata=None):
+def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organization, person_email, dependency_metadata=None, project_name=None):
     """
     Convert CycloneDX SBOM to SPDX format, ensuring all minimum required fields are present.
     
@@ -395,6 +495,7 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
         organization: The organization name
         person_email: The email of the person creating the SBOM
         dependency_metadata: Dependency metadata from the API
+        project_name: Project name from the API
     
     Returns:
         SPDX SBOM as a JSON object
@@ -402,12 +503,16 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
     print("Converting CycloneDX to SPDX format...")
     
     # Create a new SPDX document
-    current_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    current_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     document_uuid = str(uuid.uuid4())
     
     # Create a single application ID that will be referenced in documentDescribes
-    application_uuid = project_uuid.replace("-", "")[:8] + "-" + str(uuid.uuid4())
+    # Use the same UUID for both document and application to maintain linkage
+    application_uuid = f"{project_uuid}-{document_uuid}"
     application_spdx_id = f"SPDXRef-Application-{application_uuid}"
+    
+    # Use project name if available, otherwise use a default
+    display_name = project_name if project_name else f"{namespace} Application"
     
     spdx_sbom = {
         "SPDXID": "SPDXRef-DOCUMENT",
@@ -420,7 +525,7 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
                 f"Person: {person_email}"
             ]
         },
-        "name": f"SBOM for {namespace} Project {project_uuid}",
+        "name": f"SBOM for {display_name} ({project_uuid})",
         "dataLicense": "CC0-1.0",
         "documentNamespace": f"https://api.endorlabs.com/spdx/documents/{document_uuid}",
         "documentDescribes": [application_spdx_id],
