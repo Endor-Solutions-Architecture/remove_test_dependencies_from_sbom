@@ -206,7 +206,7 @@ def create_cyclonedx_sbom_export(namespace, token, package_version_uuids, output
     }
     
     try:
-        print(f"Creating CycloneDX SBOM export for {len(package_version_uuids)} packageVersions...")
+        print(f"SBOM export for {len(package_version_uuids)} packageVersions...")
         response = requests.post(url, headers=headers, json=payload, timeout=600)
         response.raise_for_status()
         
@@ -498,7 +498,7 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
     Returns:
         SPDX SBOM as a JSON object
     """
-    print("Converting CycloneDX to SPDX format...")
+    print("Creating SBOM in SPDX format...")
     
     # Create a new SPDX document
     current_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
