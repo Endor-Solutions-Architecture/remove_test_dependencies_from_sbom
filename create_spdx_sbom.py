@@ -127,7 +127,7 @@ def get_package_versions(namespace, token, project_uuid):
     }
     
     params = {
-        "list_parameters.filter": f"spec.project_uuid=={project_uuid}",
+        "list_parameters.filter": f"context.type==CONTEXT_TYPE_MAIN and spec.project_uuid=={project_uuid}",
         "list_parameters.mask": "uuid,meta.name"
     }
     
@@ -226,10 +226,9 @@ def get_package_version_by_name(token, dependency_name):
         "Request-Timeout": "600"
     }
     
-    # Set up parameters for GET request
     params = {
-        "list_parameters.filter": f'meta.name=="{dependency_name}"',
-         "list_parameters.mask": "uuid,meta.name"
+        "list_parameters.filter": f'context.type==CONTEXT_TYPE_MAIN and meta.name=="{dependency_name}"',
+        "list_parameters.mask": "uuid,meta.name"
     }
     
     try:
@@ -270,13 +269,12 @@ def get_dependency_metadata(namespace, token, project_uuid):
         "Request-Timeout": "600"
     }
     
-    print(f"Fetching dependency metadata for project {project_uuid}...")
-    
-    # Set up parameters for GET request
     params = {
-        "list_parameters.filter": f"spec.importer_data.project_uuid=={project_uuid}",
+        "list_parameters.filter": f"context.type==CONTEXT_TYPE_MAIN and spec.importer_data.project_uuid=={project_uuid}",
         "list_parameters.mask": "meta.name,spec.dependency_data,spec.importer_data"
     }
+    
+    print(f"Fetching dependency metadata for project {project_uuid}...")
     
     # Structure to hold all dependencies
     dependencies = []
@@ -642,6 +640,7 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
     # Process dependency relationships from the API if available
     if dependency_metadata:
         already_processed = set()
+        unique_deps = set()  # Track unique dependencies
         
         direct_deps = dependency_metadata.get('direct_dependencies', set())
         deps_list = dependency_metadata.get('dependencies', [])
@@ -651,6 +650,7 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
         api_name_to_spdxid = {}
         for dep_info in deps_list:
             full_name = dep_info.get('name', '')
+            unique_deps.add(full_name)  # Add to unique set
             # Extract just the name and version from format like "pypi://requests@2.32.3"
             if '@' in full_name:
                 parts = full_name.split('@')
@@ -660,6 +660,8 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
                 component_key = f"{name_part}@{version}"
                 if component_key in name_to_spdxid:
                     api_name_to_spdxid[full_name] = name_to_spdxid[component_key]
+        
+        print(f"Total unique dependencies found: {len(unique_deps)}")  # Print the count
         
         # First, add direct dependencies from main application to direct dependencies
         for dep_name in direct_deps:
