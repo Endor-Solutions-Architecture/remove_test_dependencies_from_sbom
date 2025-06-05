@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 import requests
+import re
 
 # Load environment variables from .env file
 load_dotenv()
@@ -20,7 +21,7 @@ API_URL = 'https://api.endorlabs.com/v1'
 
 # Default values for SPDX required fields
 DEFAULT_VALUES = {
-    "supplier_name": "Unknown Supplier",
+    "supplier_name": "NOASSERTION",
     "component_name": "Unknown Component",
     "component_version": "0.0.0",
     "sbom_author": "Endor Labs Customer Solutions SPDX Generator"
@@ -554,6 +555,7 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
     
     # Create mappings for easier relationship building
     name_to_spdxid = {}
+    used_spdx_ids = set()  # Track used SPDX IDs to prevent duplicates
     
     # First, create the main application package that will be described by the document
     main_app_package = {
@@ -566,6 +568,7 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
         "licenseDeclared": "NOASSERTION"
     }
     spdx_sbom["packages"].append(main_app_package)
+    used_spdx_ids.add(application_spdx_id)  # Track the main application SPDX ID
     
     # Create DESCRIBES relationship between document and main application
     relationships.append({
@@ -593,9 +596,7 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
             download_location = component.get("purl", "NOASSERTION")
         
         # Create a unique SPDX identifier for this package
-        spdx_id = f"SPDXRef-Package-{component_name.replace(' ', '-')}"
-        if component_version:
-            spdx_id += f"-{component_version}"
+        spdx_id = generate_unique_spdx_id(component_name, component_version, used_spdx_ids)
         
         # Build the full package name with version for mapping
         full_package_name = f"{component_name}@{component_version}"
@@ -716,6 +717,48 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
     spdx_sbom["relationships"] = relationships
     
     return spdx_sbom
+
+def generate_unique_spdx_id(component_name, component_version, used_ids):
+    """
+    Generate a unique SPDX ID for a component, handling duplicates and special characters.
+    
+    Args:
+        component_name: The name of the component
+        component_version: The version of the component  
+        used_ids: Set of already used SPDX IDs
+    
+    Returns:
+        A unique SPDX ID string
+    """
+    # Sanitize the component name - replace all non-alphanumeric chars with hyphens
+    sanitized_name = re.sub(r'[^a-zA-Z0-9]', '-', component_name)
+    # Remove multiple consecutive hyphens
+    sanitized_name = re.sub(r'-+', '-', sanitized_name)
+    # Remove leading/trailing hyphens
+    sanitized_name = sanitized_name.strip('-')
+    
+    # Sanitize version similarly
+    sanitized_version = ""
+    if component_version:
+        sanitized_version = re.sub(r'[^a-zA-Z0-9]', '-', str(component_version))
+        sanitized_version = re.sub(r'-+', '-', sanitized_version)
+        sanitized_version = sanitized_version.strip('-')
+    
+    # Create base SPDX ID
+    if sanitized_version:
+        base_id = f"SPDXRef-Package-{sanitized_name}-{sanitized_version}"
+    else:
+        base_id = f"SPDXRef-Package-{sanitized_name}"
+    
+    # Ensure uniqueness by adding counter if needed
+    unique_id = base_id
+    counter = 1
+    while unique_id in used_ids:
+        unique_id = f"{base_id}-{counter}"
+        counter += 1
+    
+    used_ids.add(unique_id)
+    return unique_id
 
 if __name__ == "__main__":
     main() 
