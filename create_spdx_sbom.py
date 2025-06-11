@@ -562,7 +562,7 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
         "SPDXID": application_spdx_id,
         "name": f"{namespace} Application",
         "versionInfo": "1.0.0",
-        "supplier": f"Organization: {organization}",
+        "supplier": f"{organization}",
         "downloadLocation": "NOASSERTION",
         "licenseConcluded": "NOASSERTION",
         "licenseDeclared": "NOASSERTION"
@@ -609,7 +609,7 @@ def convert_cyclonedx_to_spdx(cyclonedx_sbom, namespace, project_uuid, organizat
             "SPDXID": spdx_id,
             "name": component_name,
             "versionInfo": component_version,
-            "supplier": f"Organization: {supplier_name}",
+            "supplier": f"{supplier_name}",
             "downloadLocation": download_location,
             "licenseConcluded": "NOASSERTION",
             "licenseDeclared": "NOASSERTION"
