@@ -209,10 +209,18 @@ def read_test_dependencies(filename):
         print(f"Error reading {filename}: {e}")
         return set()
 
-def is_test_dependency(package_name, test_dependencies):
+def is_test_dependency(package_name, package_version, test_dependencies):
     """Check if a package is a test dependency."""
-    # Only exact matches - more precise and avoids false positives
-    return package_name in test_dependencies
+    # Check exact name match first
+    if package_name in test_dependencies:
+        return True
+    
+    # Check name@version format if specified in test_dependencies
+    name_version = f"{package_name}@{package_version}"
+    if name_version in test_dependencies:
+        return True
+    
+    return False
 
 def remove_test_dependencies(spdx_sbom, test_dependencies):
     """
@@ -240,9 +248,10 @@ def remove_test_dependencies(spdx_sbom, test_dependencies):
     # Identify packages that are test dependencies
     for package in cleaned_sbom.get("packages", []):
         package_name = package.get("name", "")
-        if is_test_dependency(package_name, test_dependencies):
+        package_version = package.get("versionInfo", "")
+        if is_test_dependency(package_name, package_version, test_dependencies):
             packages_to_remove.add(package.get("SPDXID"))
-            print(f"Marking for removal: {package_name} ({package.get('SPDXID')})")
+            print(f"Marking for removal: {package_name}@{package_version} ({package.get('SPDXID')})")
     
     # Remove test dependency packages
     cleaned_sbom["packages"] = [
