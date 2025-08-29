@@ -98,7 +98,7 @@ def get_project_details(token, project_uuid, initial_namespace):
             print(f"Response: {e.response.text}")
         return None, None
 
-def get_package_versions(namespace, token, project_uuid):
+def get_package_versions(namespace, token, project_uuid, branch=None):
     """Get all package versions for a project."""
     url = f"{API_URL}/namespaces/{namespace}/package-versions"
     headers = {
@@ -106,8 +106,18 @@ def get_package_versions(namespace, token, project_uuid):
         "Request-Timeout": "600"
     }
     
+    # Build filter based on context type
+    if branch and branch.lower() != "main":
+        # Use branch context if specified and not main
+        context_filter = f"context.id=={branch} and spec.project_uuid=={project_uuid}"
+        print(f"Using branch context: {branch}")
+    else:
+        # Default to main context
+        context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.project_uuid=={project_uuid}"
+        print("Using main context")
+    
     params = {
-        "list_parameters.filter": f"context.type==CONTEXT_TYPE_MAIN and spec.project_uuid=={project_uuid}",
+        "list_parameters.filter": context_filter,
         "list_parameters.mask": "uuid,meta.name"
     }
     
@@ -294,15 +304,18 @@ def main():
     parser = argparse.ArgumentParser(description='Download SPDX SBOM and remove test dependencies.')
     parser.add_argument('--project_uuid', type=str, required=True, help='The UUID of the project')
     parser.add_argument('--output', type=str, help='Output SPDX file name (defaults to {project_uuid}-cleaned-spdx.json)')
-
+    parser.add_argument('--branch', type=str, help='Branch context to analyze (defaults to main context)')
     parser.add_argument('--test-deps-file', type=str, default='test_dependencies.txt', 
                        help='File containing test dependencies to remove (default: test_dependencies.txt)')
     
     args = parser.parse_args()
     
-    # Set default filenames based on project_uuid if not provided
+    # Set default filenames based on project_uuid and branch if not provided
     if not args.output:
-        args.output = f"{args.project_uuid}-cleaned-spdx.json"
+        if args.branch and args.branch.lower() != "main":
+            args.output = f"{args.project_uuid}-{args.branch}-cleaned-spdx.json"
+        else:
+            args.output = f"{args.project_uuid}-cleaned-spdx.json"
     
     # Get environment values
     env = get_env_values()
@@ -323,7 +336,7 @@ def main():
     print(f"Using namespace from project details: {namespace}")
     
     # First, get all packageVersions for the project
-    package_versions = get_package_versions(namespace, token, args.project_uuid)
+    package_versions = get_package_versions(namespace, token, args.project_uuid, args.branch)
     
     if not package_versions:
         print(f"No packageVersions found for project {args.project_uuid}.")

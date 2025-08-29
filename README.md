@@ -31,6 +31,11 @@ Download SPDX SBOM and remove test dependencies:
 python remove_test_dependencies.py --project_uuid <your_project_uuid>
 ```
 
+Analyze a specific branch context:
+```
+python remove_test_dependencies.py --project_uuid <your_project_uuid> --branch feature-branch
+```
+
 Remove test dependencies from a custom list:
 ```
 python remove_test_dependencies.py --project_uuid <your_project_uuid> --test-deps-file my_test_deps.txt
