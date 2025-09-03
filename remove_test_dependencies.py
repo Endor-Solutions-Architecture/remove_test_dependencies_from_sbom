@@ -208,12 +208,12 @@ def get_test_dependencies_from_api(namespace, token, project_uuid, branch=None):
         "Request-Timeout": "600"
     }
     
-    # Build filter based on context type
+    # Build filter based on context type and scope
     if branch:
-        context_filter = f"context.id=={branch} and spec.importer_data.project_uuid=={project_uuid}"
+        context_filter = f"context.id=={branch} and spec.importer_data.project_uuid=={project_uuid} and spec.dependency_data.scope==DEPENDENCY_SCOPE_TEST"
         print(f"Querying test dependencies for branch context: {branch}")
     else:
-        context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.importer_data.project_uuid=={project_uuid}"
+        context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.importer_data.project_uuid=={project_uuid} and spec.dependency_data.scope==DEPENDENCY_SCOPE_TEST"
         print("Querying test dependencies for main context")
     
     params = {
@@ -240,23 +240,20 @@ def get_test_dependencies_from_api(namespace, token, project_uuid, branch=None):
             
             for obj in objects:
                 dep_data = obj.get('spec', {}).get('dependency_data', {})
+                package_name = dep_data.get('package_name', '')
+                resolved_version = dep_data.get('resolved_version', '')
                 
-                # Check if this is marked as a test dependency
-                if dep_data.get('scope') == 'DEPENDENCY_SCOPE_TEST':
-                    package_name = dep_data.get('package_name', '')
-                    resolved_version = dep_data.get('resolved_version', '')
-                    
-                    # Extract just the package name from format like "npm://merge"
-                    if package_name and '://' in package_name:
-                        package_name = package_name.split('://')[-1]
-                    
-                    if package_name and resolved_version:
-                        test_dep = f"{package_name}@{resolved_version}"
-                        test_dependencies.add(test_dep)
-                        print(f"Auto-detected test dependency: {test_dep}")
-                    elif package_name:
-                        test_dependencies.add(package_name)
-                        print(f"Auto-detected test dependency: {package_name}")
+                # Extract just the package name from format like "npm://merge"
+                if package_name and '://' in package_name:
+                    package_name = package_name.split('://')[-1]
+                
+                if package_name and resolved_version:
+                    test_dep = f"{package_name}@{resolved_version}"
+                    test_dependencies.add(test_dep)
+                    print(f"Auto-detected test dependency: {test_dep}")
+                elif package_name:
+                    test_dependencies.add(package_name)
+                    print(f"Auto-detected test dependency: {package_name}")
             
             next_page_id = data.get('list', {}).get('response', {}).get('next_page_id')
             if not next_page_id:
