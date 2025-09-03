@@ -26,19 +26,24 @@ This repository contains a script for downloading SBOM files in SPDX format from
 
 #### Examples
 
-Download SPDX SBOM and remove test dependencies:
+Download SPDX SBOM and remove test dependencies (auto-detection):
 ```
-python remove_test_dependencies.py --project_uuid <your_project_uuid>
+python remove_test_dependencies.py --project_uuid <your_project_uuid> --auto-remove-test-deps
+```
+
+Download SPDX SBOM and remove test dependencies (manual list):
+```
+python remove_test_dependencies.py --project_uuid <your_project_uuid> --test-deps-file my_deps.txt
 ```
 
 Analyze a specific branch context:
 ```
-python remove_test_dependencies.py --project_uuid <your_project_uuid> --branch feature-branch
+python remove_test_dependencies.py --project_uuid <your_project_uuid> --branch feature-branch --auto-remove-test-deps
 ```
 
-Remove test dependencies from a custom list:
+Combine auto-detection with manual list:
 ```
-python remove_test_dependencies.py --project_uuid <your_project_uuid> --test-deps-file my_test_deps.txt
+python remove_test_dependencies.py --project_uuid <your_project_uuid> --auto-remove-test-deps --test-deps-file my_test_deps.txt
 ```
 
 ### Test Dependencies File

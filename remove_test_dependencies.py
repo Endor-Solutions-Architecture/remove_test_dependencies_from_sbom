@@ -107,8 +107,8 @@ def get_package_versions(namespace, token, project_uuid, branch=None):
     }
     
     # Build filter based on context type
-    if branch and branch.lower() != "main":
-        # Use branch context if specified and not main
+    if branch:
+        # Use branch context if specified
         context_filter = f"context.id=={branch} and spec.project_uuid=={project_uuid}"
         print(f"Using branch context: {branch}")
     else:
@@ -200,6 +200,79 @@ def create_spdx_sbom_export(namespace, token, package_version_uuids, output_form
             print(f"Response: {e.response.text}")
         return None
 
+def get_test_dependencies_from_api(namespace, token, project_uuid, branch=None):
+    """Query Endor Labs API to get test dependencies for a project."""
+    url = f"{API_URL}/namespaces/{namespace}/dependency-metadata"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Request-Timeout": "600"
+    }
+    
+    # Build filter based on context type
+    if branch:
+        context_filter = f"context.id=={branch} and spec.importer_data.project_uuid=={project_uuid}"
+        print(f"Querying test dependencies for branch context: {branch}")
+    else:
+        context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.importer_data.project_uuid=={project_uuid}"
+        print("Querying test dependencies for main context")
+    
+    params = {
+        "list_parameters.filter": context_filter,
+        "list_parameters.mask": "meta.name,spec.dependency_data,spec.importer_data"
+    }
+    
+    test_dependencies = set()
+    next_page_id = None
+    page_num = 1
+    
+    while True:
+        if next_page_id:
+            params['list_parameters.page_id'] = next_page_id
+        
+        try:
+            print(f"Fetching test dependencies page {page_num}...")
+            response = requests.get(url, headers=headers, params=params, timeout=600)
+            response.raise_for_status()
+            
+            data = response.json()
+            objects = data.get('list', {}).get('objects', [])
+            print(f"Received {len(objects)} dependencies on page {page_num}")
+            
+            for obj in objects:
+                dep_data = obj.get('spec', {}).get('dependency_data', {})
+                
+                # Check if this is marked as a test dependency
+                if dep_data.get('scope') == 'DEPENDENCY_SCOPE_TEST':
+                    package_name = dep_data.get('package_name', '')
+                    resolved_version = dep_data.get('resolved_version', '')
+                    
+                    # Extract just the package name from format like "npm://merge"
+                    if package_name and '://' in package_name:
+                        package_name = package_name.split('://')[-1]
+                    
+                    if package_name and resolved_version:
+                        test_dep = f"{package_name}@{resolved_version}"
+                        test_dependencies.add(test_dep)
+                        print(f"Auto-detected test dependency: {test_dep}")
+                    elif package_name:
+                        test_dependencies.add(package_name)
+                        print(f"Auto-detected test dependency: {package_name}")
+            
+            next_page_id = data.get('list', {}).get('response', {}).get('next_page_id')
+            if not next_page_id:
+                break
+            
+            page_num += 1
+                
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to get test dependencies from API: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                print(f"Response: {e.response.text}")
+            return set()
+    
+    print(f"Total auto-detected test dependencies: {len(test_dependencies)}")
+    return test_dependencies
+
 def read_test_dependencies(filename):
     """Read test dependencies from a text file."""
     if not os.path.exists(filename):
@@ -261,7 +334,7 @@ def remove_test_dependencies(spdx_sbom, test_dependencies):
         package_version = package.get("versionInfo", "")
         if is_test_dependency(package_name, package_version, test_dependencies):
             packages_to_remove.add(package.get("SPDXID"))
-            print(f"Marking for removal: {package_name}@{package_version} ({package.get('SPDXID')})")
+            print(f"Removing dependency: {package_name}@{package_version} ({package.get('SPDXID')})")
     
     # Remove test dependency packages
     cleaned_sbom["packages"] = [
@@ -305,14 +378,25 @@ def main():
     parser.add_argument('--project_uuid', type=str, required=True, help='The UUID of the project')
     parser.add_argument('--output', type=str, help='Output SPDX file name (defaults to {project_uuid}-cleaned-spdx.json)')
     parser.add_argument('--branch', type=str, help='Branch context to analyze (defaults to main context)')
+    parser.add_argument('--auto-remove-test-deps', action='store_true', 
+                       help='Automatically detect and remove test dependencies from Endor Labs API')
     parser.add_argument('--test-deps-file', type=str, default='test_dependencies.txt', 
                        help='File containing test dependencies to remove (default: test_dependencies.txt)')
     
     args = parser.parse_args()
     
+    # Validate that user specified at least one removal method
+    if not args.auto_remove_test_deps and '--test-deps-file' not in sys.argv:
+        print("ERROR: You must specify either --auto-remove-test-deps or --test-deps-file")
+        print("Usage examples:")
+        print("  python remove_test_dependencies.py --project_uuid <uuid> --auto-remove-test-deps")
+        print("  python remove_test_dependencies.py --project_uuid <uuid> --test-deps-file my_deps.txt")
+        print("  python remove_test_dependencies.py --project_uuid <uuid> --auto-remove-test-deps --test-deps-file my_deps.txt")
+        sys.exit(1)
+    
     # Set default filenames based on project_uuid and branch if not provided
     if not args.output:
-        if args.branch and args.branch.lower() != "main":
+        if args.branch:
             args.output = f"{args.project_uuid}-{args.branch}-cleaned-spdx.json"
         else:
             args.output = f"{args.project_uuid}-cleaned-spdx.json"
@@ -372,11 +456,24 @@ def main():
         print("Failed to process SPDX data.")
         sys.exit(1)
     
-    # Read test dependencies
-    test_dependencies = read_test_dependencies(args.test_deps_file)
+    # Read test dependencies from file only if user explicitly specified --test-deps-file
+    if '--test-deps-file' in sys.argv:
+        test_dependencies = read_test_dependencies(args.test_deps_file)
+    else:
+        test_dependencies = set()
+    
+    # Get auto-detected test dependencies from API if requested
+    if args.auto_remove_test_deps:
+        api_test_deps = get_test_dependencies_from_api(namespace, token, args.project_uuid, args.branch)
+        # Combine API-detected and manually specified test dependencies
+        all_test_deps = api_test_deps.union(test_dependencies)
+        print(f"Combined {len(api_test_deps)} auto-detected + {len(test_dependencies)} manual test dependencies")
+    else:
+        all_test_deps = test_dependencies
+        print(f"Using {len(test_dependencies)} manual test dependencies")
     
     # Remove test dependencies
-    cleaned_spdx = remove_test_dependencies(spdx_data, test_dependencies)
+    cleaned_spdx = remove_test_dependencies(spdx_data, all_test_deps)
     
     # Save the original SPDX SBOM
     original_output = args.output.replace('-cleaned-', '-original-')
