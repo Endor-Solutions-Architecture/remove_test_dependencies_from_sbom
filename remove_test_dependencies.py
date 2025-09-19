@@ -74,16 +74,27 @@ def get_project_details(token, project_uuid, initial_namespace):
     print(f"Fetching project details for project {project_uuid}...")
     
     try:
+        print(f"Making request to: {url}")
+        print(f"With params: {params}")
         response = requests.get(url, headers=headers, params=params, timeout=600)
         response.raise_for_status()
         
         data = response.json()
+        print(f"Response data keys: {list(data.keys())}")
+        
         objects = data.get('list', {}).get('objects', [])
+        print(f"Found {len(objects)} objects")
         
         if objects and len(objects) > 0:
             project_data = objects[0]
+            print(f"Project data keys: {list(project_data.keys())}")
+            print(f"Project data: {project_data}")
+            
             project_name = project_data.get('meta', {}).get('name')
             namespace = project_data.get('tenant_meta', {}).get('namespace')
+            
+            print(f"Extracted project_name: {project_name}")
+            print(f"Extracted namespace: {namespace}")
             
             if project_name and namespace:
                 print(f"Project name: {project_name}, Namespace: {namespace}")
@@ -158,7 +169,7 @@ def get_package_versions(namespace, token, project_uuid, branch=None):
     print(f"Total packageVersions found: {len(package_versions)}")
     return package_versions
 
-def create_spdx_sbom_export(namespace, token, package_version_uuids, output_format="FORMAT_JSON"):
+def create_spdx_sbom_export(namespace, token, package_version_uuids, project_name=None, output_format="FORMAT_JSON"):
     """
     Create an SPDX SBOM export including multiple packageVersions.
     """
@@ -169,12 +180,15 @@ def create_spdx_sbom_export(namespace, token, package_version_uuids, output_form
         "Request-Timeout": "600"
     }
     
+    # Use project name if available, otherwise fall back to namespace
+    sbom_name = project_name if project_name else f"{namespace}-sbom"
+    
     payload = {
         "tenant_meta": {
             "namespace": namespace
         },
         "meta": {
-            "name": f"SPDX SBOM Export: {namespace}-sbom"
+            "name": f"SPDX SBOM Export: {sbom_name}"
         },
         "spec": {
             "kind": "SBOM_KIND_SPDX",
@@ -365,7 +379,6 @@ def remove_test_dependencies(spdx_sbom, test_dependencies):
     # Update document metadata
     current_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     cleaned_sbom["creationInfo"]["created"] = current_time
-    cleaned_sbom["creationInfo"]["creators"].append("Tool: Test Dependency Removal Tool")
     
     return cleaned_sbom
 
@@ -427,7 +440,7 @@ def main():
     package_version_uuids = [pv['uuid'] for pv in package_versions]
     
     # Generate an SPDX SBOM with all package versions
-    spdx_response = create_spdx_sbom_export(namespace, token, package_version_uuids, "FORMAT_JSON")
+    spdx_response = create_spdx_sbom_export(namespace, token, package_version_uuids, project_name, "FORMAT_JSON")
     
     if not spdx_response:
         print("Failed to generate SPDX SBOM.")
