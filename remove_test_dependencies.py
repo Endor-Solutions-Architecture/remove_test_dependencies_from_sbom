@@ -22,6 +22,8 @@ def get_env_values():
     api_key = os.getenv("API_KEY")
     api_secret = os.getenv("API_SECRET")
     initial_namespace = os.getenv("ENDOR_NAMESPACE")
+    organization_name = os.getenv("ORGANIZATION_NAME")
+    person_email = os.getenv("PERSON_EMAIL")
     
     if not api_key or not api_secret or not initial_namespace:
         print("ERROR: API_KEY, API_SECRET, and ENDOR_NAMESPACE environment variables must be set.")
@@ -31,7 +33,9 @@ def get_env_values():
     return {
         "api_key": api_key,
         "api_secret": api_secret,
-        "initial_namespace": initial_namespace
+        "initial_namespace": initial_namespace,
+        "organization_name": organization_name,
+        "person_email": person_email
     }
 
 def get_token(api_key, api_secret):
@@ -316,13 +320,15 @@ def is_test_dependency(package_name, package_version, test_dependencies):
     
     return False
 
-def remove_test_dependencies(spdx_sbom, test_dependencies):
+def remove_test_dependencies(spdx_sbom, test_dependencies, organization_name=None, person_email=None):
     """
     Remove test dependencies and their relationships from the SPDX SBOM.
     
     Args:
         spdx_sbom: The SPDX SBOM data as a JSON object
         test_dependencies: Set of test dependency names to remove
+        organization_name: Optional organization name for creation info
+        person_email: Optional person email for creation info
     
     Returns:
         Cleaned SPDX SBOM as a JSON object
@@ -380,6 +386,21 @@ def remove_test_dependencies(spdx_sbom, test_dependencies):
     current_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     cleaned_sbom["creationInfo"]["created"] = current_time
     
+    # Add organization and person info if provided
+    if organization_name or person_email:
+        creators = cleaned_sbom["creationInfo"].get("creators", [])
+        
+        # Remove existing Organization and Person entries to avoid duplicates
+        creators = [creator for creator in creators if not creator.startswith("Organization:") and not creator.startswith("Person:")]
+        
+        if organization_name:
+            creators.append(f"Organization: {organization_name}")
+        
+        if person_email:
+            creators.append(f"Person: {person_email}")
+        
+        cleaned_sbom["creationInfo"]["creators"] = creators
+    
     return cleaned_sbom
 
 def main():
@@ -392,6 +413,8 @@ def main():
                        help='Automatically detect and remove test dependencies from Endor Labs API')
     parser.add_argument('--test-deps-file', type=str, default='test_dependencies.txt', 
                        help='File containing test dependencies to remove (default: test_dependencies.txt)')
+    parser.add_argument('--organization', type=str, help='Organization name for SBOM creation info')
+    parser.add_argument('--person-email', type=str, help='Person email for SBOM creation info')
     
     args = parser.parse_args()
     
@@ -419,6 +442,25 @@ def main():
     if not token:
         print("Failed to get API token.")
         sys.exit(1)
+    
+    # Determine final organization name and person email with fallback logic
+    final_organization_name = None
+    final_person_email = None
+    
+    # Priority: Command line args -> Environment variables -> Will be extracted from original SBOM
+    if args.organization:
+        final_organization_name = args.organization
+        print(f"Using organization from command line: {final_organization_name}")
+    elif env.get("organization_name"):
+        final_organization_name = env["organization_name"]
+        print(f"Using organization from environment: {final_organization_name}")
+    
+    if args.person_email:
+        final_person_email = args.person_email
+        print(f"Using person email from command line: {final_person_email}")
+    elif env.get("person_email"):
+        final_person_email = env["person_email"]
+        print(f"Using person email from environment: {final_person_email}")
     
     # Get project details using the initial namespace from .env
     project_name, namespace = get_project_details(token, args.project_uuid, env["initial_namespace"])
@@ -466,6 +508,31 @@ def main():
         print("Failed to process SPDX data.")
         sys.exit(1)
     
+    # Extract organization/person info from original SBOM if not already set
+    original_creators = spdx_data.get("creationInfo", {}).get("creators", [])
+    for creator in original_creators:
+        if creator.startswith("Organization:") and not final_organization_name:
+            final_organization_name = creator.replace("Organization: ", "")
+            print(f"Extracted organization from original SBOM: {final_organization_name}")
+        elif creator.startswith("Person:") and not final_person_email:
+            # Handle both "Person: email@domain.com" and "Person: Name (email@domain.com)" formats
+            person_info = creator.replace("Person: ", "")
+            if '@' in person_info:
+                # Extract email from "Name (email@domain.com)" format
+                if '(' in person_info and ')' in person_info:
+                    import re
+                    email_match = re.search(r'\(([^)]+)\)', person_info)
+                    if email_match:
+                        final_person_email = email_match.group(1)
+                    else:
+                        final_person_email = person_info
+                else:
+                    final_person_email = person_info
+                print(f"Extracted person email from original SBOM: {final_person_email}")
+                # Break to ensure we only take the first Person entry found
+                if final_person_email:
+                    break
+    
     # Read test dependencies from file only if user explicitly specified --test-deps-file
     if '--test-deps-file' in sys.argv:
         test_dependencies = read_test_dependencies(args.test_deps_file)
@@ -483,7 +550,9 @@ def main():
         print(f"Using {len(test_dependencies)} manual test dependencies")
     
     # Remove test dependencies
-    cleaned_spdx = remove_test_dependencies(spdx_data, all_test_deps)
+    cleaned_spdx = remove_test_dependencies(spdx_data, all_test_deps, 
+                                           final_organization_name, 
+                                           final_person_email)
     
     # Save the original SPDX SBOM
     original_output = args.output.replace('-cleaned-', '-original-')

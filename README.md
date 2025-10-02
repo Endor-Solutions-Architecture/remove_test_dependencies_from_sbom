@@ -22,7 +22,11 @@ This repository contains a script for downloading SBOM files in SPDX format from
    API_KEY=<YOUR_KEY>
    API_SECRET=<YOUR_SECRET>
    ENDOR_NAMESPACE="<YOUR_TENANT_NAMESPACE>"
+   ORGANIZATION_NAME="<YOUR_ORGANIZATION_NAME>"
+   PERSON_EMAIL="<YOUR_EMAIL@company.com>"
    ```
+
+   **Note:** `API_KEY`, `API_SECRET`, and `ENDOR_NAMESPACE` are required. `ORGANIZATION_NAME` and `PERSON_EMAIL` are optional and will be added to the cleaned SBOM's creation information if provided.
 
 #### Examples
 
@@ -45,6 +49,16 @@ Combine auto-detection with manual list:
 ```
 python remove_test_dependencies.py --project_uuid <your_project_uuid> --auto-remove-test-deps --test-deps-file my_test_deps.txt
 ```
+
+Override organization and person info via command line:
+```
+python remove_test_dependencies.py --project_uuid <your_project_uuid> --auto-remove-test-deps --organization "My Company" --person-email "dev@mycompany.com"
+```
+
+**Note:** Organization and person info priority:
+1. Command line flags (`--organization` / `--person-email`)
+2. Environment variables (`ORGANIZATION_NAME` / `PERSON_EMAIL`)
+3. Extracted from original SBOM's creation info
 
 ### Test Dependencies File
 
