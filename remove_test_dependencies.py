@@ -113,6 +113,67 @@ def get_project_details(token, project_uuid, initial_namespace):
             print(f"Response: {e.response.text}")
         return None, None
 
+def check_branch_context(namespace, token, project_uuid, branch):
+    """
+    Check if the project has only one repository version matching the branch.
+    If so, use CONTEXT_TYPE_MAIN instead of context.id==branch.
+    
+    Returns:
+        tuple: (use_main_context: bool, actual_branch_name: str or None)
+    """
+    url = f"{API_URL}/namespaces/{namespace}/repository-versions"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Request-Timeout": "600"
+    }
+    
+    params = {
+        "list_parameters.filter": f"meta.parent_uuid=={project_uuid}",
+        "list_parameters.mask": "meta.name",
+        "list_parameters.traverse": "true"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=600)
+        response.raise_for_status()
+        
+        data = response.json()
+        repository_versions = data.get('list', {}).get('objects', [])
+        
+        print(f"Found {len(repository_versions)} repository versions for project {project_uuid}")
+        
+        # If only one repository version exists
+        if len(repository_versions) == 1:
+            repo_version = repository_versions[0]
+            branch_name = repo_version.get('meta', {}).get('name', '')
+            
+            print(f"Single repository version found with name: {branch_name}")
+            
+            # If the single branch matches the passed branch name, use main context
+            if branch_name == branch or branch_name == 'default':
+                print(f"Project has only one branch ({branch_name}), using main context instead of branch-specific context")
+                return True, branch_name
+        
+        # Check if any repository version matches the branch
+        matching_branches = []
+        for repo_version in repository_versions:
+            branch_name = repo_version.get('meta', {}).get('name', '')
+            if branch_name == branch:
+                matching_branches.append(branch_name)
+        
+        if matching_branches:
+            print(f"Found {len(matching_branches)} repository version(s) matching branch '{branch}'")
+            return False, branch
+        
+        # If no matches found, still try the branch context (might be a new branch)
+        print(f"No repository version found matching branch '{branch}', will try branch context anyway")
+        return False, branch
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Failed to check repository versions: {e}")
+        print("Falling back to branch context")
+        return False, branch
+
 def get_package_versions(namespace, token, project_uuid, branch=None):
     """Get all package versions for a project."""
     url = f"{API_URL}/namespaces/{namespace}/package-versions"
@@ -123,9 +184,17 @@ def get_package_versions(namespace, token, project_uuid, branch=None):
     
     # Build filter based on context type
     if branch:
-        # Use branch context if specified
-        context_filter = f"context.id=={branch} and spec.project_uuid=={project_uuid}"
-        print(f"Using branch context: {branch}")
+        # Check if we should use main context (single branch scenario)
+        use_main_context, actual_branch = check_branch_context(namespace, token, project_uuid, branch)
+        
+        if use_main_context:
+            # Project has only one branch, use main context
+            context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.project_uuid=={project_uuid}"
+            print(f"Using main context (project has only one branch: {actual_branch})")
+        else:
+            # Use branch-specific context
+            context_filter = f"context.id=={branch} and spec.project_uuid=={project_uuid}"
+            print(f"Using branch context: {branch}")
     else:
         # Default to main context
         context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.project_uuid=={project_uuid}"
@@ -228,8 +297,17 @@ def get_test_dependencies_from_api(namespace, token, project_uuid, branch=None):
     
     # Build filter based on context type and scope
     if branch:
-        context_filter = f"context.id=={branch} and spec.importer_data.project_uuid=={project_uuid} and spec.dependency_data.scope==DEPENDENCY_SCOPE_TEST"
-        print(f"Querying test dependencies for branch context: {branch}")
+        # Check if we should use main context (single branch scenario)
+        use_main_context, actual_branch = check_branch_context(namespace, token, project_uuid, branch)
+        
+        if use_main_context:
+            # Project has only one branch, use main context
+            context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.importer_data.project_uuid=={project_uuid} and spec.dependency_data.scope==DEPENDENCY_SCOPE_TEST"
+            print(f"Querying test dependencies for main context (project has only one branch: {actual_branch})")
+        else:
+            # Use branch-specific context
+            context_filter = f"context.id=={branch} and spec.importer_data.project_uuid=={project_uuid} and spec.dependency_data.scope==DEPENDENCY_SCOPE_TEST"
+            print(f"Querying test dependencies for branch context: {branch}")
     else:
         context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.importer_data.project_uuid=={project_uuid} and spec.dependency_data.scope==DEPENDENCY_SCOPE_TEST"
         print("Querying test dependencies for main context")
