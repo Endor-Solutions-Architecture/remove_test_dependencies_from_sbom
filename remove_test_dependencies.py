@@ -116,8 +116,8 @@ def get_project_details(token, project_uuid, initial_namespace):
 def get_default_branch(namespace, token, project_uuid):
     """Fetch the default branch name from the project's Repository object.
 
-    Returns the bare branch name (without the 'refs/heads/' prefix) or None
-    if the Repository can't be located or has no default branch set.
+    Returns the value of spec.default_branch verbatim (e.g.
+    'refs/heads/release/Sprint-200') or None if it can't be determined.
     """
     url = f"{API_URL}/namespaces/{namespace}/repositories"
     headers = {
@@ -140,10 +140,6 @@ def get_default_branch(namespace, token, project_uuid):
             return None
 
         ref = repos[0].get('spec', {}).get('default_branch') or ''
-        prefix = "refs/heads/"
-        if ref.startswith(prefix):
-            ref = ref[len(prefix):]
-
         if not ref:
             print("Warning: Repository found but spec.default_branch is empty")
             return None
@@ -540,7 +536,7 @@ def main():
     parser.add_argument('--person-email', type=str, help='Person email for SBOM creation info')
     
     args = parser.parse_args()
-    
+
     # Validate that user specified at least one removal method
     if not args.auto_remove_test_deps and '--test-deps-file' not in sys.argv:
         print("ERROR: You must specify either --auto-remove-test-deps or --test-deps-file")
@@ -550,10 +546,14 @@ def main():
         print("  python remove_test_dependencies.py --project_uuid <uuid> --auto-remove-test-deps --test-deps-file my_deps.txt")
         sys.exit(1)
     
-    # Set default filenames based on project_uuid and branch if not provided
+    # Set default filenames based on project_uuid and branch if not provided.
+    # Branch names can contain '/' (e.g. 'refs/heads/release/Sprint-200'), which
+    # would be interpreted as directory separators in the output path — replace
+    # them with '_' for the filename only; API calls still use the raw value.
     if not args.output:
         if args.branch:
-            args.output = f"{args.project_uuid}-{args.branch}-cleaned-spdx.json"
+            safe_branch = args.branch.replace('/', '_')
+            args.output = f"{args.project_uuid}-{safe_branch}-cleaned-spdx.json"
         else:
             args.output = f"{args.project_uuid}-cleaned-spdx.json"
     
