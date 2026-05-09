@@ -411,18 +411,17 @@ def remove_test_dependencies(spdx_sbom, test_dependencies, organization_name=Non
     Returns:
         Cleaned SPDX SBOM as a JSON object
     """
-    if not test_dependencies:
+    if test_dependencies:
+        print(f"Removing {len(test_dependencies)} test dependencies from SBOM...")
+    else:
         print("No test dependencies to remove.")
-        return spdx_sbom
-    
-    print(f"Removing {len(test_dependencies)} test dependencies from SBOM...")
-    
+
     # Create a copy to avoid modifying the original
     cleaned_sbom = json.loads(json.dumps(spdx_sbom))
-    
+
     # Track packages to remove
     packages_to_remove = set()
-    
+
     # Identify packages that are test dependencies
     for package in cleaned_sbom.get("packages", []):
         package_name = package.get("name", "")
@@ -430,15 +429,15 @@ def remove_test_dependencies(spdx_sbom, test_dependencies, organization_name=Non
         if is_test_dependency(package_name, package_version, test_dependencies):
             packages_to_remove.add(package.get("SPDXID"))
             print(f"Removing dependency: {package_name}@{package_version} ({package.get('SPDXID')})")
-    
+
     # Remove test dependency packages
     cleaned_sbom["packages"] = [
         package for package in cleaned_sbom.get("packages", [])
         if package.get("SPDXID") not in packages_to_remove
     ]
-    
+
     print(f"Removed {len(packages_to_remove)} packages")
-    
+
     # Clean up relationships
     if "relationships" in cleaned_sbom:
         # Remove relationships that involve removed packages
