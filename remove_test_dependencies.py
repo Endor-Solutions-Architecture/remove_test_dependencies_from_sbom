@@ -113,6 +113,43 @@ def get_project_details(token, project_uuid, initial_namespace):
             print(f"Response: {e.response.text}")
         return None, None
 
+def get_default_branch(namespace, token, project_uuid):
+    """Fetch the default branch name from the project's Repository object.
+
+    Returns the value of spec.default_branch verbatim (e.g.
+    'refs/heads/release/Sprint-200') or None if it can't be determined.
+    """
+    url = f"{API_URL}/namespaces/{namespace}/repositories"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Request-Timeout": "600"
+    }
+    params = {
+        "list_parameters.filter": f"meta.parent_uuid=={project_uuid}",
+        "list_parameters.mask": "spec.default_branch",
+        "list_parameters.traverse": "true"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=600)
+        response.raise_for_status()
+        data = response.json()
+        repos = data.get('list', {}).get('objects', [])
+        if not repos:
+            print(f"Warning: no Repository found for project {project_uuid}; default branch unknown")
+            return None
+
+        ref = repos[0].get('spec', {}).get('default_branch') or ''
+        if not ref:
+            print("Warning: Repository found but spec.default_branch is empty")
+            return None
+
+        print(f"Default branch for project: {ref}")
+        return ref
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Failed to fetch default branch: {e}")
+        return None
+
 def check_branch_context(namespace, token, project_uuid, branch):
     """
     Check if the project has only one repository version matching the branch.
@@ -174,31 +211,41 @@ def check_branch_context(namespace, token, project_uuid, branch):
         print("Falling back to branch context")
         return False, branch
 
-def get_package_versions(namespace, token, project_uuid, branch=None):
+def resolve_use_main_context(namespace, token, project_uuid, branch, default_branch):
+    """Decide whether to use CONTEXT_TYPE_MAIN or context.id==<branch>.
+
+    - No --branch passed → main.
+    - --branch matches the project's default branch → main.
+    - --branch passed but default branch unknown → fall back to the single-branch
+      heuristic in check_branch_context (preserves prior behavior on API errors).
+    - Otherwise → branch context.
+    """
+    if not branch:
+        return True
+    if default_branch is not None:
+        return branch == default_branch
+    use_main, _ = check_branch_context(namespace, token, project_uuid, branch)
+    return use_main
+
+def get_package_versions(namespace, token, project_uuid, branch=None, default_branch=None):
     """Get all package versions for a project."""
     url = f"{API_URL}/namespaces/{namespace}/package-versions"
     headers = {
         "Authorization": f"Bearer {token}",
         "Request-Timeout": "600"
     }
-    
-    # Build filter based on context type
-    if branch:
-        # Check if we should use main context (single branch scenario)
-        use_main_context, actual_branch = check_branch_context(namespace, token, project_uuid, branch)
-        
-        if use_main_context:
-            # Project has only one branch, use main context
-            context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.project_uuid=={project_uuid}"
-            print(f"Using main context (project has only one branch: {actual_branch})")
-        else:
-            # Use branch-specific context
-            context_filter = f"context.id=={branch} and spec.project_uuid=={project_uuid}"
-            print(f"Using branch context: {branch}")
-    else:
-        # Default to main context
+
+    use_main_context = resolve_use_main_context(namespace, token, project_uuid, branch, default_branch)
+
+    if use_main_context:
         context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.project_uuid=={project_uuid}"
-        print("Using main context")
+        if branch:
+            print(f"Using main context (--branch {branch} matches default branch)")
+        else:
+            print("Using main context")
+    else:
+        context_filter = f"context.id=={branch} and spec.project_uuid=={project_uuid}"
+        print(f"Using branch context: {branch}")
     
     params = {
         "list_parameters.filter": context_filter,
@@ -287,30 +334,25 @@ def create_spdx_sbom_export(namespace, token, package_version_uuids, project_nam
             print(f"Response: {e.response.text}")
         return None
 
-def get_test_dependencies_from_api(namespace, token, project_uuid, branch=None):
+def get_test_dependencies_from_api(namespace, token, project_uuid, branch=None, default_branch=None):
     """Query Endor Labs API to get test dependencies for a project."""
     url = f"{API_URL}/namespaces/{namespace}/dependency-metadata"
     headers = {
         "Authorization": f"Bearer {token}",
         "Request-Timeout": "600"
     }
-    
-    # Build filter based on context type and scope
-    if branch:
-        # Check if we should use main context (single branch scenario)
-        use_main_context, actual_branch = check_branch_context(namespace, token, project_uuid, branch)
-        
-        if use_main_context:
-            # Project has only one branch, use main context
-            context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.importer_data.project_uuid=={project_uuid} and spec.dependency_data.scope==DEPENDENCY_SCOPE_TEST"
-            print(f"Querying test dependencies for main context (project has only one branch: {actual_branch})")
-        else:
-            # Use branch-specific context
-            context_filter = f"context.id=={branch} and spec.importer_data.project_uuid=={project_uuid} and spec.dependency_data.scope==DEPENDENCY_SCOPE_TEST"
-            print(f"Querying test dependencies for branch context: {branch}")
-    else:
+
+    use_main_context = resolve_use_main_context(namespace, token, project_uuid, branch, default_branch)
+
+    if use_main_context:
         context_filter = f"context.type==CONTEXT_TYPE_MAIN and spec.importer_data.project_uuid=={project_uuid} and spec.dependency_data.scope==DEPENDENCY_SCOPE_TEST"
-        print("Querying test dependencies for main context")
+        if branch:
+            print(f"Querying test dependencies for main context (--branch {branch} matches default branch)")
+        else:
+            print("Querying test dependencies for main context")
+    else:
+        context_filter = f"context.id=={branch} and spec.importer_data.project_uuid=={project_uuid} and spec.dependency_data.scope==DEPENDENCY_SCOPE_TEST"
+        print(f"Querying test dependencies for branch context: {branch}")
     
     params = {
         "list_parameters.filter": context_filter,
@@ -494,7 +536,7 @@ def main():
     parser.add_argument('--person-email', type=str, help='Person email for SBOM creation info')
     
     args = parser.parse_args()
-    
+
     # Validate that user specified at least one removal method
     if not args.auto_remove_test_deps and '--test-deps-file' not in sys.argv:
         print("ERROR: You must specify either --auto-remove-test-deps or --test-deps-file")
@@ -504,10 +546,14 @@ def main():
         print("  python remove_test_dependencies.py --project_uuid <uuid> --auto-remove-test-deps --test-deps-file my_deps.txt")
         sys.exit(1)
     
-    # Set default filenames based on project_uuid and branch if not provided
+    # Set default filenames based on project_uuid and branch if not provided.
+    # Branch names can contain '/' (e.g. 'refs/heads/release/Sprint-200'), which
+    # would be interpreted as directory separators in the output path — replace
+    # them with '_' for the filename only; API calls still use the raw value.
     if not args.output:
         if args.branch:
-            args.output = f"{args.project_uuid}-{args.branch}-cleaned-spdx.json"
+            safe_branch = args.branch.replace('/', '_')
+            args.output = f"{args.project_uuid}-{safe_branch}-cleaned-spdx.json"
         else:
             args.output = f"{args.project_uuid}-cleaned-spdx.json"
     
@@ -547,9 +593,13 @@ def main():
         sys.exit(1)
     
     print(f"Using namespace from project details: {namespace}")
-    
+
+    # Fetch the project's default branch from its Repository object so we can
+    # treat --branch <default> the same as no --branch (use CONTEXT_TYPE_MAIN).
+    default_branch = get_default_branch(namespace, token, args.project_uuid)
+
     # First, get all packageVersions for the project
-    package_versions = get_package_versions(namespace, token, args.project_uuid, args.branch)
+    package_versions = get_package_versions(namespace, token, args.project_uuid, args.branch, default_branch)
     
     if not package_versions:
         print(f"No packageVersions found for project {args.project_uuid}.")
@@ -618,7 +668,7 @@ def main():
     
     # Get auto-detected test dependencies from API if requested
     if args.auto_remove_test_deps:
-        api_test_deps = get_test_dependencies_from_api(namespace, token, args.project_uuid, args.branch)
+        api_test_deps = get_test_dependencies_from_api(namespace, token, args.project_uuid, args.branch, default_branch)
         # Combine API-detected and manually specified test dependencies
         all_test_deps = api_test_deps.union(test_dependencies)
         print(f"Combined {len(api_test_deps)} auto-detected + {len(test_dependencies)} manual test dependencies")
